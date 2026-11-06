@@ -1,0 +1,77 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unpack project (fish-voice-v2.zip)
+        run: unzip -q fish-voice-v2.zip
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Make target voice from your recording
+        continue-on-error: true
+        run: |
+          if [ -f target_voice.txt ]; then
+            echo "Использую готовый target_voice.txt из репозитория"
+          else
+            sample=$(find . -maxdepth 1 -type f \( -iname '*.wav' -o -iname '*.mp3' -o -iname '*.m4a' -o -iname '*.ogg' -o -iname '*.flac' -o -iname '*.aac' -o -iname '*.3gp' -o -iname '*.opus' -o -iname '*.amr' \) | head -n 1)
+            if [ -z "$sample" ]; then
+              echo "::warning::Не найдена запись голоса (wav/mp3/m4a) в корне репозитория. Собираю без целевого голоса - ИИ не включится."
+              exit 0
+            fi
+            echo "Запись голоса: $sample"
+            which ffmpeg >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+            python fish-voice-v2/tools/make_target_voice.py "$sample"
+          fi
+          if [ -f target_voice.txt ]; then
+            cp target_voice.txt fish-voice-v2/app/src/main/assets/target_voice.txt
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK / NDK / CMake
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264" "cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        working-directory: fish-voice-v2
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: fish-voice-v2-debug-apk
+          path: fish-voice-v2/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload target voice
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-voice
+          path: target_voice.txt
+          if-no-files-found: ignore
